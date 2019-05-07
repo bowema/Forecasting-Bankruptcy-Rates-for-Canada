@@ -1,1 +1,1 @@
-# Forecasting-Bankruptcy-Rates-for-Canada
+# Forecasting Bankruptcy Rates for Canada

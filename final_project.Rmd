@@ -1,0 +1,381 @@
+---
+# title: "MSDS604 Final Project"
+# author: "Shulun Chen, Bowen Ma, Jinghui Zhao, Wenkun Xiao"
+# date: "December 8rd, 2018"
+output: pdf_document
+---
+
+```{r libraries, include=FALSE}
+knitr::opts_chunk$set(echo = T)
+knitr::opts_chunk$set(cache = F)
+knitr::opts_chunk$set(warning = T)
+knitr::opts_chunk$set(message = T)
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=65),tidy=TRUE)
+library(tidyverse)
+library(magrittr)
+library(tseries)
+library(forecast)
+library(vars)
+```
+
+## Project Description
+
+This project aims to build a time series model to forecast monthly bankruptcy rates in Canada for the period from January 2015 to December 2017. The dataset we worked on contains historical bankruptcy rates, unemployment rates, population, and house price index from January 1987 to December 2014. In this report, we explored different time series modeling approaches, such as `Holt-Winters` , `SARIMA` , `SARIMAX`  and `VAR` , to find the optimal model with the best predictive accuracy which is measured by the RMSE (Root Mean Squared Error). The historical monthly bankruptcy rates are shown below:
+
+```{r data_loading, fig.width=12, fig.height=6, echo=FALSE}
+setwd("/home/shulun/Documents/MSDS-604/project")
+data <- read_csv("train.csv", col_types = cols())
+test <- read_csv("test.csv", col_types = cols())
+
+data_frame(Time=seq.Date(as.Date("1987-01-01"), as.Date("2014-12-01"), "month"), 
+           Bankruptcy=data$Bankruptcy_Rate) %>% 
+ggplot() +
+  geom_line(aes(Time, Bankruptcy)) + 
+  labs(x="\nTime", y="Bankruptcy Rate\n", title="Fig1 Bankruptcy Rate in Canada") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+## Modeling Methods
+
+Numerous approaches are available for forecasting bankruptcy rates. Depending on the number of variables used for modeling, there are two main categories: univariate modeling and multivariate modeling.
+
+A univariate modeling approach, as indicated by its name, considers only the historical data of the variable being modeled and takes no external information into consideration. In our case, we used only historical bankruptcy rates data to train our univariate models, such as `Holt-Winters` and `SARIMA`  (under the `Box-Jenkins` framework). `Holt-Winters` is the simplest approach since it does not rely on any statistical assumptions. It makes predictions by performing a smoothing on the historical observations in the time series. `SARIMA` is the most common type of modeling under the `Box-Jenkins` framework and will be discussed in more details in the next section.
+
+On the other hand, a multivariate modeling approach considers external data. There are two common types of multivariate models: `SARIMAX`, and Vector Autoregression (`VAR`). If the external information is treated as exogenous, meaning the external variables have a uni-directional influence on the response, then a `SARIMAX` should be employed. For instance, to predict the corn production, rainfall may be considered as an exogenous variable since it has an influence on the corn production. However, corn production does not influence rainfall. On the contrary, if the external variables are treated as endogenous, meaning the external variables and response have mutual influence, then a Vector Autoregression model should be employed. In our case, with bankruptcy rates as the response variable, we considered unemployment rates, house price index, and population for multivariate modeling.  
+
+After exploring all of the above models, `SARIMAX(2, 1, 5)`$\times$`(3, 0, 2)`$_{12}$ was found to be the optimal model.
+
+## Justification of Modeling Approach 
+
+### Data Preprocessing
+### (1) Train-Validation Data Split
+
+In order to find the best model with the lowest RMSE (root mean squared error), a train-validation data split was carried out on the original `train.csv` dataset. The validation dataset was used to measure and rank the model performance based on the RMSE values. We determined the split to be at the end of year 2013 - thus the training set contains 324 data points, and the validation set contains 12 data points.
+
+```{r echo=FALSE}
+cutoff <- 324
+train <- data[1:cutoff,]
+valid <- data[(cutoff+1):nrow(data),]
+
+br_train <- ts(train$Bankruptcy_Rate[!is.na(train$Bankruptcy_Rate)], 
+               start = c(1987,1), end = c(2013,12), frequency = 12)
+br_valid <- ts(valid$Bankruptcy_Rate[!is.na(valid$Bankruptcy_Rate)],
+               start = c(2014,1), end = c(2014,12), frequency = 12)
+
+# convert the entire train data to a time series object
+br_data <- ts(data$Bankruptcy_Rate[!is.na(data$Bankruptcy_Rate)], 
+              start = c(1987,1), end = c(2014,12), frequency = 12)
+```
+
+### (2) Box-Cox Transformation
+
+Box-Cox tranformation is useful in adjusting the non-constant variation in data. The bankruptcy data has shown certain degree of inflated variance over time which was mitigated by the Box-Cox transformation.
+
+```{r echo=FALSE, include=F}
+(lambda <- BoxCox.lambda(br_data))
+# par(mfrow=c(2,1))
+# plot(data$Bankruptcy_Rate, type = "l", ylab = "Rate")
+# plot(BoxCox(data$Bankruptcy_Rate, lambda = lambda), type = "l", ylab = "Transformed Rate")
+# br_train <- BoxCox(br_train, lambda = lambda)
+# br_valid <- BoxCox(br_valid, lambda = lambda)
+# br_data <- BoxCox(br_data, lambda = lambda)
+```
+
+### Modeling
+### (1) Holt-Winters Model 
+
+`Holt-Winters` method, also known as exponential smoothing, is a modeling method with no distributional assumptions.
+
+Exponential smoothing uses exponential equations to model level, trend, and seasonality components of the time series. Since our data exhibits both trend and seasonal components, we employed triple exponential smoothing to model and forecast the data. The seasonal component could be modeled either additively or multiplicatively depending on the variance. Since the variance in data appears to be non-constant over time, we selected multiplicative seasonality for our model.
+
+The parameters $\alpha$, $\beta$, and $\gamma$, which represent the model's sensitivity to level, trend, and seasonality, were found to be $\alpha$ = 0.3802, $\beta$ = 0.0013, $\gamma$ = 0.1906 for the optimal `Holt-Winters` model.
+
+```{r echo=FALSE, include=F}
+m1 <- HoltWinters(x = br_train, season = "multi")
+br_pred <- forecast(m1, h = length(br_valid), level = 0.95)
+rmse.hw <- sqrt(mean((br_pred$mean - br_valid)^2))
+rmse.hw
+
+m2 <- HoltWinters(x = br_train, alpha = 0.4, beta = 0.25, gamma = 0.5,
+                  seasonal = "multi")
+br_pred <- forecast(m2, h = length(br_valid))
+rmse.m2 <- sqrt(mean((br_pred$mean - br_valid)^2))
+rmse.m2
+```
+
+The fitted and forecast results of the `Holt-Winters` model are shown below:
+
+```{r hw_plotting, fig.width=12, fig.height=6, echo=FALSE}
+train_month <- seq.Date(as.Date("1987-01-01"), as.Date("2014-12-01"), "month")
+test_month <- seq.Date(as.Date("2015-01-01"), as.Date("2017-12-01"), "month") 
+
+hw_model <- HoltWinters(x = br_data)
+hw_pred <- forecast(hw_model, h = length(test_month), level = 0.95)
+plot(hw_model, xlim = c(1986, 2019), ylim = c(0.5, 5), main = "", ylab = "Bankruptcy Rate")
+par(new = T)
+plot(hw_pred, xlim = c(1986, 2019), ylim = c(0.5, 5), main = "Fig2 Holt-Winters Model")
+legend("topleft", legend = c("Observed", "Fitted", "Predicted"), lty = 1, col = c("black", "red", "blue"), cex = 1)
+par(new = F)
+```
+
+
+### (2) SARIMA Model
+
+Seasonal Autoregressive Integrated Moving Average, or `SARIMA` is widely used for modeling univariate non-stationary time series that exhibits seasonality and/or trend. The idea of `SARIMA` modeling is to transform the non-stationary time series into a new stationary time series, such that the stationary time series can be modeled by an `ARMA` model (the basic time series model). This transformation can be achieved by taking finite times of seasonal differencing and trend (ordinary) differencing.
+
+`SARIMA` model is composed of a within-season time series, which can be modeled by `ARMA(p, q)`, and a between-season time series, which can be modeled by `ARMA(P, Q)`.
+
+Since the data exhibits both trend and seasonality, we considered both components. For the trend component, $p$ represents trend autoregression order, $d$ represents ordinary (trend) difference order, and $q$ represents trend moving average order. For the seasonal component, $P$ represents seasonal autoregressive order, $D$ represents seasonal difference order, $Q$ represents seasonal moving average order, and $m$ represents the number of time steps for a single seasonal period. These are all captured in the `SARIMA (p,d,q)`$\times$`(P, D, Q)`$_m$ model.
+
+The Box-Jenkins Framework for SARIMA modeling process was followed:
+
+* Applied Box-Cox transformation to fix the non-constant variance;
+* Took ordinary difference once to eliminate trend (we have confirmed the differencing orders by applying $R$ functions `ndiffs` and `nsdiffs`);
+* Identified that $p\leq2$, $q\leq5$, $P\leq3$, $Q\leq8$ from ACF and PACF plots of the differenced time series;
+* Fitted proposed models with orders within above range and iterated to find optimum;
+* Checked residual plots to ensure that the model assumptions were valid;
+* Forecast into the future.
+
+We searched all combinations of the models within the range and obtained the top 10 models with the least RMSE. Since prediction accuracy was used as the metric, we picked the model `SARIMA(2,1,5)`$\times$`(3,0,2)`$_{12}$ with the lowest RMSE from the table below. In addition, the assumptions of zero-mean, constant variance, and uncorrelatedness were all satisfied. 
+
+
+```{r echo=FALSE, include=F}
+m3 <- auto.arima(br_train, allowdrift = F)
+m3
+br_pred <- forecast(m3, h = length(br_valid), level = 0.95)
+rmse.m3 <- sqrt(mean((br_pred$mean - br_valid)^2))
+rmse.m3
+```
+
+```{r include=F}
+sarima_model <- Arima(br_train, order = c(2,1,5), seasonal = c(3,0,2), method = "CSS", lambda = lambda)
+sarima_pred <- forecast(sarima_model, h = length(test_month), level = 0.95)
+rmse.sarima <- sqrt(mean((sarima_pred$mean - br_valid)^2))
+rmse.sarima
+```
+
+```{r echo=FALSE, include=F}
+ndiffs(br_train)
+nsdiffs(br_train)
+```
+
+
+```{r error=F, warning=F, echo=F, include=F}
+l_p <- c()
+l_q <- c()
+l_P <- c()
+l_Q <- c()
+l_loglik <- c()
+l_sigma2 <- c()
+l_rmse <- c()
+
+for (P in 0:3){
+  for (Q in 0:8){
+    for (p in 1:2){
+      for (q in 1:5){
+        tryCatch({
+          m <- Arima(br_train, order=c(p,1,q), seasonal=c(P,0,Q), method="CSS", lambda=lambda)
+          f <- forecast(object=m, h=12, level=0.95, lambda=lambda)
+          # compute root mean squared error (RMSE)
+          accu <- forecast::accuracy(f, br_valid)
+          l_p <- c(l_p, p)
+          l_q <- c(l_q, q)
+          l_P <- c(l_P, P)
+          l_Q <- c(l_Q, Q)
+          l_loglik <- c(l_loglik, m$loglik)
+          l_sigma2 <- c(l_sigma2, m$sigma2)
+          l_rmse <- c(l_rmse, accu[2,2])},
+          error = function(e){cat("Error:", conditionMessage(e), '\n')})
+         }
+        }
+  }
+}
+
+table <- data.frame('p'=l_p, 'q'=l_q, 'P'=l_P, 'Q'=l_Q, 'loglik'=l_loglik, 'sigma2'=l_sigma2, 'rmse'=l_rmse)
+```
+
+```{r plot_table, echo=F}
+table_ordered <- table[order(table$rmse),]
+knitr::kable(head(table_ordered, 10))
+```
+
+The fitted and forecast results of the `SARIMA` model are shown below:
+
+```{r sarima_plotting, fig.width=12, fig.height=6, echo=FALSE}
+sarima_model <- Arima(br_data, order = c(2,1,2), seasonal = c(2,1,2), method = "CSS", lambda = lambda)
+fitted <- br_data - sarima_model$residuals
+sarima_pred <- forecast(sarima_model, h = length(test_month), level = 0.95)
+ts.plot(br_data, fitted, xlim = c(1986, 2019), ylim = c(0.5, 5.5), 
+        main = "", ylab = "Bankruptcy Rate", col = c("black", "red"))
+par(new = T)
+plot(sarima_pred, xlim = c(1986, 2019), ylim = c(0.5, 5.5), main = "Fig3 SARIMA Model")
+legend("topleft", legend = c("Observed", "Fitted", "Predicted"), lty = 1, col = c("black", "red", "blue"), cex = 1)
+par(new = F)
+```
+
+
+### (3) SARIMAX Model
+
+A `SARIMAX` model is a `SARIMA` model with explanatory variables. `SARIMAX` model is a popular method for modeling multivariate time series. We considered multivariate time series when there exists other variables that are highly correlated with the response variable.
+
+In our case, bankruptcy rates were highly correlated with population and house price index and was negatively correlated with unemployment rates (according to CCF plot below). By considering a `SARIMAX` model, we hoped to improve the predictive accuracy based on the previously built `SARIMA` model. 
+
+```{r echo=FALSE, message=F, fig.width=8, fig.height=3}
+par(mfrow=c(1,3))
+ccf(data$Bankruptcy_Rate, data$Unemployment_Rate, main="Fig4.1 Unemployment")  # suggests negative correlation
+ccf(data$Bankruptcy_Rate, data$Population, main="Fig4.2 Population") # suggests positive correlation
+ccf(data$Bankruptcy_Rate, data$House_Price_Index, main="Fig4.3 House Price Index")    # suggests positive correlation
+```
+
+<!-- ### (a) Against Unemployment_Rate -->
+```{r echo=F, include=T, results='hide'}
+x_df <- ts(train$Unemployment_Rate, start = c(1987,1), end = c(2013,12), frequency = 12)
+m4 <- auto.arima(br_train, xreg = x_df, lambda = lambda)
+x_pred <- ts(valid$Unemployment_Rate, start = c(2014,1), end = c(2014,12), frequency = 12)
+br_pred <- forecast(m4, h = length(br_valid), xreg = x_pred, level = 0.95)
+rmse.m4 <- sqrt(mean((br_pred$mean - br_valid)^2))
+rmse.m4
+```
+
+```{r echo=FALSE, include=F}
+x_df <- ts(train$Unemployment_Rate, start = c(1987,1), end = c(2013,12), frequency = 12)
+sarimax_model <- Arima(br_train, order = c(2,1,5), seasonal = c(3,0,2), method = "CSS", lambda = lambda, xreg = x_df)
+sarimax_pred <- forecast(sarimax_model, h = length(br_valid), xreg = x_pred, level = 0.95)
+rmse <- sqrt(mean((sarimax_pred$mean - br_valid)^2))
+rmse
+```
+
+We tried all combinations of SARIMAX model and found that the best SARIMAX model contains explanatory variable unemployment rate. This model gives the lowest RMSE (`r round(rmse, 4)`) so far, which is lower than the RMSE we obtained from the `SARIMA` model. In addition, the assumptions of zero-mean, constant variance, and uncorrelatedness are all satisfied. 
+
+<!-- ### (b) Against Population -->
+```{r echo=FALSE, include=F}
+x_df <- data.frame(ts(train$Population, start = c(1987,1), end = c(2013,12), frequency = 12))
+m5 <- auto.arima(br_train, xreg = x_df, lambda = lambda)
+m5
+x_pred <- data.frame(ts(valid$Population, start = c(2014,1), end = c(2014,12), frequency = 12))
+br_pred <- forecast(m5, h = length(br_valid), xreg = x_pred, level = 0.95)
+rmse.m5 <- sqrt(mean((br_pred$mean - br_valid)^2))
+rmse.m5
+```
+
+<!-- ### (c) Against House_Price_Index -->
+```{r echo=FALSE, include=F}
+x_df <- data.frame(ts(train$House_Price_Index, start = c(1987,1), end = c(2013,12), frequency = 12))
+m6 <- auto.arima(br_train, xreg = x_df, lambda = lambda)
+m6
+x_pred <- data.frame(ts(valid$House_Price_Index, start = c(2014,1), end = c(2014,12), frequency = 12))
+br_pred <- forecast(m6, h = length(br_valid), xreg = x_pred, level = 0.95)
+rmse.m6 <- sqrt(mean((br_pred$mean - br_valid)^2))
+rmse.m6
+```
+
+<!-- ### (d) Against Month -->
+```{r echo=FALSE, include=F}
+x_df <- data.frame(ts(train$Month, start = c(1987,1), end = c(2013,12), frequency = 12))
+m7 <- auto.arima(br_train, xreg = x_df, lambda = lambda)
+m7
+x_pred <- data.frame(ts(valid$Month, start = c(2014,1), end = c(2014,12), frequency = 12))
+br_pred <- forecast(m7, h = length(br_valid), xreg = x_pred, level = 0.95)
+rmse.m7 <- sqrt(mean((br_pred$mean - br_valid)^2))
+rmse.m7
+```
+
+The fitted and forecast results of the `SARIMAX` model are shown below:
+
+```{r sarimax_plotting, fig.width=12, fig.height=6, echo=FALSE}
+# Choose the best model (smallest RMSE) out of the previous ones
+x_df <- ts(data$Unemployment_Rate, start = c(1987,1), end = c(2014,12), frequency = 12)
+x_pred <- ts(test$Unemployment_Rate, start = c(2015,1), end = c(2017,12), frequency = 12)
+# sarimax_model <- Arima(br_data, order = c(,0,2), seasonal = list(order = c(2,1,2)), xreg = x_df, method = "CSS-ML", lambda = lambda)
+sarimax_model <- Arima(br_data, order = c(2,1,5), seasonal = list(order = c(3,0,2)), xreg = x_df, method = "CSS", lambda = lambda)
+fitted <- br_data - sarimax_model$residuals
+sarimax_pred <- forecast(sarimax_model, h = length(test_month), xreg = x_pred, level = 0.95)
+ts.plot(br_data, fitted, xlim = c(1986, 2019), ylim = c(0.5, 5.5), 
+        main = "", ylab = "Bankruptcy Rate", col = c("black", "red"))
+par(new = T)
+plot(sarimax_pred, xlim = c(1986, 2019), ylim = c(0.5, 5.5), main = "Fig5 SARIMAX Model")
+legend("topleft", legend = c("Observed", "Fitted", "Predicted"), lty = 1, col = c("black", "red", "blue"), cex = 1)
+par(new = F)
+```
+
+
+### (4) VAR Model
+
+Vector Autoregression (`VAR(p)`) model, an extension of the univariate autoregression model to multivariate time series data, is a system of equations whose variables are treated as endogeneous. The model consists of $r$ equations, one for each variable, that are each autoregressions of order $p$.
+
+<!-- $$ -->
+<!-- \begin{aligned} -->
+<!-- Y_{1,t} = C_1 + \Sigma_{i=1}^p\phi_{11,i}Y_{1,t-i} &+ \Sigma_{i=1}^p\phi_{12,i}Y_{2,t-i} + \dots + \Sigma_{i=1}^p\phi_{1r,i}Y_{r,t-i} + \epsilon_{1,t}\\ -->
+<!-- &\vdots \\ -->
+<!-- Y_{r,t} = C_r + \Sigma_{i=1}^p\phi_{r1,i}Y_{1,t-1} &+ \Sigma_{i=1}^p\phi_{r2,i}Y_{2,t-i} + \dots + \Sigma_{i=1}^p\phi_{rr,i}Y_{r,t-i} + \epsilon_{r,t} -->
+<!-- \end{aligned} -->
+<!-- $$ -->
+<!-- where $\epsilon_{k,t}$ ~ WN(0, $\sigma_k^2$) for $k$ = 1,2, $\dots$, $r$. -->
+
+We chose this model to account for the relationships between explanatory variables. For example, house price index and population might be influencing each other, since a larger population boosts the house price, on the other hand, a higher house price reduces the population in an area. Their mutual influence could be fully accounted for by the `VAR` model.
+
+```{r echo=FALSE, include=F}
+unemployment <- ts(train$Unemployment_Rate, start = c(1987,1), end = c(2013,12), frequency = 12)
+population <- ts(train$Population, start = c(1987,1), end = c(2013,12), frequency = 12)
+house_price_index <- ts(train$House_Price_Index, start = c(1987,1), end = c(2013,12), frequency = 12)
+
+VARselect(y = data.frame(br_train, unemployment, population, house_price_index), lag.max = 10)
+```
+
+
+```{r echo=FALSE, include=F}
+br_train_box <- BoxCox(br_train, lambda = lambda)
+m8 <- VAR(y = data.frame(br_train_box, BoxCox(train$Unemployment_Rate, lambda = lambda), 
+                         BoxCox(train$Population, lambda = lambda), 
+                         BoxCox(train$House_Price_Index, lambda = lambda)), p = 3, season = 12)
+
+pred <- predict(m8, n.ahead = length(br_valid), ci = 0.95)
+
+pred_inv <- InvBoxCox(pred$fcst$br_train[,1], lambda = lambda)
+rmse.var <- sqrt(mean((pred_inv- br_valid)^2))
+rmse.var
+```
+
+In our case, *p* was chosen to be 3 based on the RMSE values. The fitted and forecast results of the `VAR` model are shown below:
+
+```{r vars_plotting, fig.width=12, fig.height=6, echo=FALSE}
+unemployment <- ts(data$Unemployment_Rate, start = c(1987,1), end = c(2014,12), frequency = 12)
+population <- ts(data$Population, start = c(1987,1), end = c(2014,12), frequency = 12)
+house_price_index <- ts(data$House_Price_Index, start = c(1987,1), end = c(2014,12), frequency = 12)
+
+var_model <- VAR(data.frame(br_data, unemployment, population, house_price_index), p = 3, season = 12)
+# One fewer month here for end...
+var_fit <- ts(fitted(var_model)[,1], start = c(1987,4), end = c(2014,12), frequency = 12)
+var_pred <- predict(var_model, n.ahead = length(test_month), ci = 0.95)
+var_fcst <- ts(var_pred$fcst$br_data[,1], start = c(2015,1), end = c(2017,12), frequency = 12)
+var_lower <- ts(var_pred$fcst$br_data[,2], start = c(2015,1), end = c(2017,12), frequency = 12)
+var_upper <- ts(var_pred$fcst$br_data[,3], start = c(2015,1), end = c(2017,12), frequency = 12)
+ts.plot(br_data, var_fit, xlim = c(1986, 2019), ylim = c(0.5, 5.5), 
+        main = "", ylab = "Bankruptcy Rate", col = c("black", "red"))
+par(new = T)
+plot(var_fcst, xlim = c(1986, 2019), ylim = c(0.5, 5.5), col = "blue", ylab = "", main = "Fig6 VAR Model")
+lines(var_lower, xlim = c(1986, 2019), ylim = c(0.5, 5.5), lty = "dashed", col = "gray")
+lines(var_upper, xlim = c(1986, 2019), ylim = c(0.5, 5.5), lty = "dashed", col = "gray")
+legend("topleft", legend = c("Observed", "Fitted", "Predicted"), lty = 1, col = c("black", "red", "blue"), cex = 1)
+par(new = F)
+```
+
+## Forecasting Results
+
+We chose the final model to be `SARIMAX(2, 1, 5)`$\times$`(3, 0, 2)`$_{12}$ and it was plotted in `Fig5`. It has the lowest RMSE value of `r round(rmse,4)` on our test set. The model assumptions, including zero-mean, constant variance, and uncorrelatedness, are all satisfied. The best models out of all categories are shown in the table below:
+
+|Models||RMSE|
+|:---|--|---:|
+|`SARIMAX(2, 1, 5)`$\times$`(3, 0, 2)`$_{12}$||`r format(round(rmse,6), nsmall=6)`|
+|`SARIMA(2, 1, 5)`$\times$`(3, 0, 2)`$_{12}$||`r round(rmse.sarima,6)`|
+|`VAR(3)`||`r round(rmse.var,6)`|
+|`Holt-Winters`||`r round(rmse.hw,6)`|
+
+The forecasting results for 2015-2017 are shown in the table below:
+
+```{r echo=F}
+# print forecast result
+pred_table <- data.frame(sarimax_pred)
+knitr::kable(sarimax_pred, col.names=c('Prediction', 'Lower Bound', 'Upper Bound'))
+```
+
